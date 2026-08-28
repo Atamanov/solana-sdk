@@ -1,20 +1,11 @@
+#[cfg(not(target_os = "solana"))]
+use crate::target_arch::{narsil_endianness, narsil_error, Endianness};
 use crate::{
     consts::{ALT_BN128_FIELD_SIZE, ALT_BN128_G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE},
     AltBn128Error, LE_FLAG,
 };
 #[cfg(target_os = "solana")]
 use solana_define_syscall::definitions as syscalls;
-#[cfg(not(target_os = "solana"))]
-use {
-    crate::{
-        consts::ALT_BN128_FQ2_SIZE,
-        target_arch::{convert_endianness, Endianness, G1, G2},
-        PodG1, PodG2,
-    },
-    ark_ec::{self, AffineRepr},
-    ark_ff::BigInteger256,
-    ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress},
-};
 
 /// Input size for the g1 multiplication operation.
 pub const ALT_BN128_G1_MULTIPLICATION_INPUT_SIZE: usize =
@@ -79,72 +70,12 @@ pub fn alt_bn128_versioned_g1_multiplication(
     input: &[u8],
     endianness: Endianness,
 ) -> Result<Vec<u8>, AltBn128Error> {
-    let expected_length = match version {
-        VersionedG1Multiplication::V0 => 128,
-        VersionedG1Multiplication::V1 => ALT_BN128_G1_MULTIPLICATION_INPUT_SIZE,
+    let version = match version {
+        VersionedG1Multiplication::V0 => helius_narsil::flat::G1MultiplicationVersion::V0,
+        VersionedG1Multiplication::V1 => helius_narsil::flat::G1MultiplicationVersion::V1,
     };
-
-    match endianness {
-        Endianness::BE => {
-            if input.len() > expected_length {
-                return Err(AltBn128Error::InvalidInputData);
-            }
-        }
-        Endianness::LE => {
-            if input.len() != expected_length {
-                return Err(AltBn128Error::InvalidInputData);
-            }
-        }
-    }
-
-    let mut input = input.to_vec();
-    match endianness {
-        Endianness::BE => input.resize(expected_length, 0),
-        Endianness::LE => (),
-    }
-
-    let p: G1 = match endianness {
-        Endianness::BE => PodG1::from_be_bytes(&input[..ALT_BN128_G1_POINT_SIZE])?.try_into()?,
-        Endianness::LE => PodG1::from_le_bytes(&input[..ALT_BN128_G1_POINT_SIZE])?.try_into()?,
-    };
-    let mut fr_bytes = [0u8; ALT_BN128_FIELD_SIZE];
-    match endianness {
-        Endianness::BE => {
-            fr_bytes = convert_endianness::<ALT_BN128_FIELD_SIZE, ALT_BN128_FIELD_SIZE>(
-                &input[ALT_BN128_G1_POINT_SIZE..ALT_BN128_G1_MULTIPLICATION_INPUT_SIZE]
-                    .try_into()
-                    .unwrap(),
-            )
-        }
-        Endianness::LE => {
-            fr_bytes.copy_from_slice(
-                &input[ALT_BN128_G1_POINT_SIZE..ALT_BN128_G1_MULTIPLICATION_INPUT_SIZE],
-            );
-        }
-    }
-    let fr = BigInteger256::deserialize_uncompressed_unchecked(fr_bytes.as_slice())
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    let result_point: G1 = p.mul_bigint(fr).into();
-
-    let mut result_point_data = [0u8; ALT_BN128_G1_POINT_SIZE];
-
-    result_point
-        .x
-        .serialize_with_mode(&mut result_point_data[..ALT_BN128_FIELD_SIZE], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-    result_point
-        .y
-        .serialize_with_mode(&mut result_point_data[ALT_BN128_FIELD_SIZE..], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    match endianness {
-        Endianness::BE => Ok(
-            convert_endianness::<ALT_BN128_FIELD_SIZE, ALT_BN128_G1_POINT_SIZE>(&result_point_data)
-                .to_vec(),
-        ),
-        Endianness::LE => Ok(result_point_data.to_vec()),
-    }
+    helius_narsil::flat::alt_bn128_g1_multiplication(version, input, narsil_endianness(endianness))
+        .map_err(narsil_error)
 }
 
 #[inline(always)]
@@ -245,52 +176,11 @@ pub fn alt_bn128_versioned_g2_multiplication(
     input: &[u8],
     endianness: Endianness,
 ) -> Result<Vec<u8>, AltBn128Error> {
-    if input.len() != ALT_BN128_G2_MULTIPLICATION_INPUT_SIZE {
-        return Err(AltBn128Error::InvalidInputData);
-    }
-
-    let p: G2 = match endianness {
-        Endianness::BE => PodG2::from_be_bytes(&input[..ALT_BN128_G2_POINT_SIZE])?.try_into()?,
-        Endianness::LE => PodG2::from_le_bytes(&input[..ALT_BN128_G2_POINT_SIZE])?.try_into()?,
+    let version = match _version {
+        VersionedG2Multiplication::V0 => helius_narsil::flat::G2MultiplicationVersion::V0,
     };
-    let mut fr_bytes = [0u8; ALT_BN128_FIELD_SIZE];
-    match endianness {
-        Endianness::BE => {
-            fr_bytes = convert_endianness::<ALT_BN128_FIELD_SIZE, ALT_BN128_FIELD_SIZE>(
-                &input[ALT_BN128_G2_POINT_SIZE..ALT_BN128_G2_MULTIPLICATION_INPUT_SIZE]
-                    .try_into()
-                    .unwrap(),
-            )
-        }
-        Endianness::LE => {
-            fr_bytes.copy_from_slice(
-                &input[ALT_BN128_G2_POINT_SIZE..ALT_BN128_G2_MULTIPLICATION_INPUT_SIZE],
-            );
-        }
-    }
-    let fr = BigInteger256::deserialize_uncompressed_unchecked(fr_bytes.as_slice())
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    let result_point: G2 = p.mul_bigint(fr).into();
-
-    let mut result_point_data = [0u8; ALT_BN128_G2_POINT_SIZE];
-
-    result_point
-        .x
-        .serialize_with_mode(&mut result_point_data[..ALT_BN128_FQ2_SIZE], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-    result_point
-        .y
-        .serialize_with_mode(&mut result_point_data[ALT_BN128_FQ2_SIZE..], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    match endianness {
-        Endianness::BE => Ok(
-            convert_endianness::<ALT_BN128_FQ2_SIZE, ALT_BN128_G2_POINT_SIZE>(&result_point_data)
-                .to_vec(),
-        ),
-        Endianness::LE => Ok(result_point_data.to_vec()),
-    }
+    helius_narsil::flat::alt_bn128_g2_multiplication(version, input, narsil_endianness(endianness))
+        .map_err(narsil_error)
 }
 
 #[inline(always)]

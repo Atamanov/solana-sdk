@@ -113,18 +113,18 @@ impl From<AltBn128CompressionError> for u64 {
 mod target_arch {
 
     pub use crate::target_arch::convert_endianness;
-    use {
-        super::*,
-        crate::compression::alt_bn128_compression_size,
-        ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate},
-    };
-
-    type G1 = ark_bn254::g1::G1Affine;
-    type G2 = ark_bn254::g2::G2Affine;
+    use {super::*, crate::compression::alt_bn128_compression_size};
 
     enum Endianness {
         BE,
         LE,
+    }
+
+    fn narsil_endianness(endianness: Endianness) -> helius_narsil::flat::Endianness {
+        match endianness {
+            Endianness::BE => helius_narsil::flat::Endianness::BE,
+            Endianness::LE => helius_narsil::flat::Endianness::LE,
+        }
     }
 
     #[deprecated(
@@ -160,29 +160,8 @@ mod target_arch {
             g1_bytes
                 .try_into()
                 .map_err(|_| AltBn128CompressionError::InvalidInputSize)?;
-        if g1_bytes == [0u8; alt_bn128_compression_size::ALT_BN128_G1_COMPRESSED_POINT_SIZE] {
-            return Ok([0u8; ALT_BN128_G1_POINT_SIZE]);
-        }
-        let g1_bytes = match endianness {
-            Endianness::BE => convert_endianness::<32, 32>(&g1_bytes),
-            Endianness::LE => g1_bytes,
-        };
-        let decompressed_g1 =
-            G1::deserialize_with_mode(g1_bytes.as_slice(), Compress::Yes, Validate::No)
-                .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
-        let mut decompressed_g1_bytes = [0u8; ALT_BN128_G1_POINT_SIZE];
-        decompressed_g1
-            .x
-            .serialize_with_mode(&mut decompressed_g1_bytes[..32], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
-        decompressed_g1
-            .y
-            .serialize_with_mode(&mut decompressed_g1_bytes[32..], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
-        match endianness {
-            Endianness::BE => Ok(convert_endianness::<32, 64>(&decompressed_g1_bytes)),
-            Endianness::LE => Ok(decompressed_g1_bytes),
-        }
+        helius_narsil::flat::alt_bn128_g1_decompress(&g1_bytes, narsil_endianness(endianness))
+            .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)
     }
 
     #[deprecated(
@@ -229,22 +208,8 @@ mod target_arch {
         let g1_bytes: [u8; ALT_BN128_G1_POINT_SIZE] = g1_bytes
             .try_into()
             .map_err(|_| AltBn128CompressionError::InvalidInputSize)?;
-        if g1_bytes == [0u8; ALT_BN128_G1_POINT_SIZE] {
-            return Ok([0u8; alt_bn128_compression_size::ALT_BN128_G1_COMPRESSED_POINT_SIZE]);
-        }
-        let g1_bytes = match endianness {
-            Endianness::BE => convert_endianness::<32, 64>(&g1_bytes),
-            Endianness::LE => g1_bytes,
-        };
-        let g1 = G1::deserialize_with_mode(g1_bytes.as_slice(), Compress::No, Validate::No)
-            .map_err(|_| AltBn128CompressionError::G1CompressionFailed)?;
-        let mut g1_bytes = [0u8; alt_bn128_compression_size::ALT_BN128_G1_COMPRESSED_POINT_SIZE];
-        G1::serialize_compressed(&g1, g1_bytes.as_mut_slice())
-            .map_err(|_| AltBn128CompressionError::G1CompressionFailed)?;
-        match endianness {
-            Endianness::BE => Ok(convert_endianness::<32, 32>(&g1_bytes)),
-            Endianness::LE => Ok(g1_bytes),
-        }
+        helius_narsil::flat::alt_bn128_g1_compress(&g1_bytes, narsil_endianness(endianness))
+            .map_err(|_| AltBn128CompressionError::G1CompressionFailed)
     }
 
     #[deprecated(
@@ -280,29 +245,8 @@ mod target_arch {
             g2_bytes
                 .try_into()
                 .map_err(|_| AltBn128CompressionError::InvalidInputSize)?;
-        if g2_bytes == [0u8; alt_bn128_compression_size::ALT_BN128_G2_COMPRESSED_POINT_SIZE] {
-            return Ok([0u8; ALT_BN128_G2_POINT_SIZE]);
-        }
-        let g2_bytes = match endianness {
-            Endianness::BE => convert_endianness::<64, 64>(&g2_bytes),
-            Endianness::LE => g2_bytes,
-        };
-        let decompressed_g2 =
-            G2::deserialize_with_mode(g2_bytes.as_slice(), Compress::Yes, Validate::No)
-                .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
-        let mut decompressed_g2_bytes = [0u8; ALT_BN128_G2_POINT_SIZE];
-        decompressed_g2
-            .x
-            .serialize_with_mode(&mut decompressed_g2_bytes[..64], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
-        decompressed_g2
-            .y
-            .serialize_with_mode(&mut decompressed_g2_bytes[64..128], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
-        match endianness {
-            Endianness::BE => Ok(convert_endianness::<64, 128>(&decompressed_g2_bytes)),
-            Endianness::LE => Ok(decompressed_g2_bytes),
-        }
+        helius_narsil::flat::alt_bn128_g2_decompress(&g2_bytes, narsil_endianness(endianness))
+            .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)
     }
 
     #[deprecated(
@@ -349,22 +293,8 @@ mod target_arch {
         let g2_bytes: [u8; ALT_BN128_G2_POINT_SIZE] = g2_bytes
             .try_into()
             .map_err(|_| AltBn128CompressionError::InvalidInputSize)?;
-        if g2_bytes == [0u8; ALT_BN128_G2_POINT_SIZE] {
-            return Ok([0u8; alt_bn128_compression_size::ALT_BN128_G2_COMPRESSED_POINT_SIZE]);
-        }
-        let g2_bytes = match endianness {
-            Endianness::BE => convert_endianness::<64, 128>(&g2_bytes),
-            Endianness::LE => g2_bytes,
-        };
-        let g2 = G2::deserialize_with_mode(g2_bytes.as_slice(), Compress::No, Validate::No)
-            .map_err(|_| AltBn128CompressionError::G2CompressionFailed)?;
-        let mut g2_bytes = [0u8; alt_bn128_compression_size::ALT_BN128_G2_COMPRESSED_POINT_SIZE];
-        G2::serialize_compressed(&g2, g2_bytes.as_mut_slice())
-            .map_err(|_| AltBn128CompressionError::G2CompressionFailed)?;
-        match endianness {
-            Endianness::BE => Ok(convert_endianness::<64, 64>(&g2_bytes)),
-            Endianness::LE => Ok(g2_bytes),
-        }
+        helius_narsil::flat::alt_bn128_g2_compress(&g2_bytes, narsil_endianness(endianness))
+            .map_err(|_| AltBn128CompressionError::G2CompressionFailed)
     }
 }
 

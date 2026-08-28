@@ -1453,6 +1453,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
+name = "helius-narsil"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "cc",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1924,18 +1933,6 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "light-poseidon"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47a1ccadd0bb5a32c196da536fd72c59183de24a055f6bf0513bf845fefab862"
-dependencies = [
- "ark-bn254",
- "ark-ff",
- "num-bigint",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "linux-raw-sys"
@@ -3329,12 +3326,11 @@ name = "solana-bn254"
 version = "3.2.1"
 dependencies = [
  "ark-bn254",
- "ark-ec",
- "ark-ff",
  "ark-serialize",
  "array-bytes",
  "bytemuck",
  "criterion",
+ "helius-narsil",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4046,8 +4042,7 @@ dependencies = [
 name = "solana-poseidon"
 version = "5.0.0"
 dependencies = [
- "ark-bn254",
- "light-poseidon",
+ "helius-narsil",
  "solana-define-syscall",
  "thiserror 2.0.19",
 ]
