@@ -113,14 +113,7 @@ impl From<AltBn128CompressionError> for u64 {
 mod target_arch {
 
     pub use crate::target_arch::convert_endianness;
-    use {
-        super::*,
-        crate::compression::alt_bn128_compression_size,
-        ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate},
-    };
-
-    type G1 = ark_bn254::g1::G1Affine;
-    type G2 = ark_bn254::g2::G2Affine;
+    use {super::*, crate::compression::alt_bn128_compression_size, crate::mcl};
 
     enum Endianness {
         BE,
@@ -167,17 +160,7 @@ mod target_arch {
             Endianness::BE => convert_endianness::<32, 32>(&g1_bytes),
             Endianness::LE => g1_bytes,
         };
-        let decompressed_g1 =
-            G1::deserialize_with_mode(g1_bytes.as_slice(), Compress::Yes, Validate::No)
-                .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
-        let mut decompressed_g1_bytes = [0u8; ALT_BN128_G1_POINT_SIZE];
-        decompressed_g1
-            .x
-            .serialize_with_mode(&mut decompressed_g1_bytes[..32], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
-        decompressed_g1
-            .y
-            .serialize_with_mode(&mut decompressed_g1_bytes[32..], Compress::No)
+        let decompressed_g1_bytes = mcl::g1_decompress(&g1_bytes)
             .map_err(|_| AltBn128CompressionError::G1DecompressionFailed)?;
         match endianness {
             Endianness::BE => Ok(convert_endianness::<32, 64>(&decompressed_g1_bytes)),
@@ -236,10 +219,7 @@ mod target_arch {
             Endianness::BE => convert_endianness::<32, 64>(&g1_bytes),
             Endianness::LE => g1_bytes,
         };
-        let g1 = G1::deserialize_with_mode(g1_bytes.as_slice(), Compress::No, Validate::No)
-            .map_err(|_| AltBn128CompressionError::G1CompressionFailed)?;
-        let mut g1_bytes = [0u8; alt_bn128_compression_size::ALT_BN128_G1_COMPRESSED_POINT_SIZE];
-        G1::serialize_compressed(&g1, g1_bytes.as_mut_slice())
+        let g1_bytes = mcl::g1_compress(&g1_bytes)
             .map_err(|_| AltBn128CompressionError::G1CompressionFailed)?;
         match endianness {
             Endianness::BE => Ok(convert_endianness::<32, 32>(&g1_bytes)),
@@ -287,17 +267,7 @@ mod target_arch {
             Endianness::BE => convert_endianness::<64, 64>(&g2_bytes),
             Endianness::LE => g2_bytes,
         };
-        let decompressed_g2 =
-            G2::deserialize_with_mode(g2_bytes.as_slice(), Compress::Yes, Validate::No)
-                .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
-        let mut decompressed_g2_bytes = [0u8; ALT_BN128_G2_POINT_SIZE];
-        decompressed_g2
-            .x
-            .serialize_with_mode(&mut decompressed_g2_bytes[..64], Compress::No)
-            .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
-        decompressed_g2
-            .y
-            .serialize_with_mode(&mut decompressed_g2_bytes[64..128], Compress::No)
+        let decompressed_g2_bytes = mcl::g2_decompress(&g2_bytes)
             .map_err(|_| AltBn128CompressionError::G2DecompressionFailed)?;
         match endianness {
             Endianness::BE => Ok(convert_endianness::<64, 128>(&decompressed_g2_bytes)),
@@ -356,10 +326,7 @@ mod target_arch {
             Endianness::BE => convert_endianness::<64, 128>(&g2_bytes),
             Endianness::LE => g2_bytes,
         };
-        let g2 = G2::deserialize_with_mode(g2_bytes.as_slice(), Compress::No, Validate::No)
-            .map_err(|_| AltBn128CompressionError::G2CompressionFailed)?;
-        let mut g2_bytes = [0u8; alt_bn128_compression_size::ALT_BN128_G2_COMPRESSED_POINT_SIZE];
-        G2::serialize_compressed(&g2, g2_bytes.as_mut_slice())
+        let g2_bytes = mcl::g2_compress(&g2_bytes)
             .map_err(|_| AltBn128CompressionError::G2CompressionFailed)?;
         match endianness {
             Endianness::BE => Ok(convert_endianness::<64, 64>(&g2_bytes)),

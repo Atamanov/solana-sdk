@@ -1,20 +1,13 @@
+#[cfg(not(target_os = "solana"))]
+use crate::{
+    consts::ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE, mcl, target_arch::Endianness, PodG1, PodG2,
+};
 use crate::{
     consts::{ALT_BN128_G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE},
     AltBn128Error, LE_FLAG,
 };
 #[cfg(target_os = "solana")]
 use solana_define_syscall::definitions as syscalls;
-#[cfg(not(target_os = "solana"))]
-use {
-    crate::{
-        consts::ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE,
-        target_arch::{Endianness, G1, G2},
-        PodG1, PodG2,
-    },
-    ark_bn254::{self, Config},
-    ark_ec::{bn::Bn, pairing::Pairing},
-    ark_ff::{BigInteger, BigInteger256, One},
-};
 
 /// Pair element size.
 pub const ALT_BN128_PAIRING_ELEMENT_SIZE: usize = ALT_BN128_G1_POINT_SIZE + ALT_BN128_G2_POINT_SIZE; // 192
@@ -84,37 +77,33 @@ pub fn alt_bn128_versioned_pairing(
 
     let ele_len = input.len().saturating_div(ALT_BN128_PAIRING_ELEMENT_SIZE);
 
-    let mut vec_pairs: Vec<(G1, G2)> = Vec::with_capacity(ele_len);
+    let mut pairs_le: Vec<u8> = Vec::with_capacity(input.len());
     for chunk in input.chunks(ALT_BN128_PAIRING_ELEMENT_SIZE).take(ele_len) {
         let (p_bytes, q_bytes) = chunk.split_at(G1_POINT_SIZE);
 
         let g1 = match endianness {
-            Endianness::BE => PodG1::from_be_bytes(p_bytes)?.try_into()?,
-            Endianness::LE => PodG1::from_le_bytes(p_bytes)?.try_into()?,
+            Endianness::BE => PodG1::from_be_bytes(p_bytes)?,
+            Endianness::LE => PodG1::from_le_bytes(p_bytes)?,
         };
         let g2 = match endianness {
-            Endianness::BE => PodG2::from_be_bytes(q_bytes)?.try_into()?,
-            Endianness::LE => PodG2::from_le_bytes(q_bytes)?.try_into()?,
+            Endianness::BE => PodG2::from_be_bytes(q_bytes)?,
+            Endianness::LE => PodG2::from_le_bytes(q_bytes)?,
         };
 
-        vec_pairs.push((g1, g2));
+        pairs_le.extend_from_slice(&g1.0);
+        pairs_le.extend_from_slice(&g2.0);
     }
 
-    let mut result = BigInteger256::from(0u64);
-    let res = <Bn<Config> as Pairing>::multi_pairing(
-        vec_pairs.iter().map(|pair| pair.0),
-        vec_pairs.iter().map(|pair| pair.1),
-    );
+    let is_one = mcl::pairing_is_one(&pairs_le)?;
 
-    if res.0 == ark_bn254::Fq12::one() {
-        result = BigInteger256::from(1u64);
+    let mut output = [0u8; ALT_BN128_PAIRING_OUTPUT_SIZE];
+    if is_one {
+        match endianness {
+            Endianness::BE => output[ALT_BN128_PAIRING_OUTPUT_SIZE - 1] = 1,
+            Endianness::LE => output[0] = 1,
+        }
     }
-
-    let output = match endianness {
-        Endianness::BE => result.to_bytes_be(),
-        Endianness::LE => result.to_bytes_le(),
-    };
-    Ok(output)
+    Ok(output.to_vec())
 }
 
 #[inline(always)]

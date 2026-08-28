@@ -202,15 +202,11 @@ pub struct PodG1(pub [u8; G1_POINT_SIZE]);
 pub struct PodG2(pub [u8; G2_POINT_SIZE]);
 
 #[cfg(not(target_os = "solana"))]
-mod target_arch {
-    use {
-        super::*,
-        ark_ec::{self, AffineRepr},
-        ark_serialize::{CanonicalDeserialize, Compress, Validate},
-    };
+pub(crate) mod mcl;
 
-    pub(crate) type G1 = ark_bn254::g1::G1Affine;
-    pub(crate) type G2 = ark_bn254::g2::G2Affine;
+#[cfg(not(target_os = "solana"))]
+mod target_arch {
+    use super::*;
 
     impl PodG1 {
         /// Takes in an EIP-197 (big-endian) byte encoding of a group element in G1 and constructs a
@@ -237,29 +233,6 @@ mod target_arch {
     }
 
     impl PodG2 {
-        /// Deserializes to an affine point in G2.
-        /// This function performs the curve equation check, but skips the subgroup check.
-        pub(crate) fn into_affine_unchecked(self) -> Result<G2, AltBn128Error> {
-            if self.0 == [0u8; 128] {
-                return Ok(G2::zero());
-            }
-
-            // Skips the expensive subgroup check
-            let g2 = G2::deserialize_with_mode(
-                &*[&self.0[..], &[0u8][..]].concat(),
-                Compress::No,
-                Validate::No,
-            )
-            .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-            // Still check if point is on the curve
-            if !g2.is_on_curve() {
-                return Err(AltBn128Error::GroupError);
-            }
-
-            Ok(g2)
-        }
-
         /// Takes in an EIP-197 (big-endian) byte encoding of a group element in G2
         /// and constructs a `PodG2` struct that encodes the same bytes in
         /// little-endian.
@@ -281,58 +254,6 @@ mod target_arch {
                     .try_into()
                     .map_err(|_| AltBn128Error::SliceOutOfBounds)?,
             ))
-        }
-    }
-
-    impl TryFrom<PodG1> for G1 {
-        type Error = AltBn128Error;
-
-        fn try_from(bytes: PodG1) -> Result<Self, Self::Error> {
-            if bytes.0 == [0u8; 64] {
-                return Ok(G1::zero());
-            }
-            let g1 = Self::deserialize_with_mode(
-                &*[&bytes.0[..], &[0u8][..]].concat(),
-                Compress::No,
-                Validate::Yes,
-            );
-
-            match g1 {
-                Ok(g1) => {
-                    if !g1.is_on_curve() {
-                        Err(AltBn128Error::GroupError)
-                    } else {
-                        Ok(g1)
-                    }
-                }
-                Err(_) => Err(AltBn128Error::InvalidInputData),
-            }
-        }
-    }
-
-    impl TryFrom<PodG2> for G2 {
-        type Error = AltBn128Error;
-
-        fn try_from(bytes: PodG2) -> Result<Self, Self::Error> {
-            if bytes.0 == [0u8; 128] {
-                return Ok(G2::zero());
-            }
-            let g2 = Self::deserialize_with_mode(
-                &*[&bytes.0[..], &[0u8][..]].concat(),
-                Compress::No,
-                Validate::Yes,
-            );
-
-            match g2 {
-                Ok(g2) => {
-                    if !g2.is_on_curve() {
-                        Err(AltBn128Error::GroupError)
-                    } else {
-                        Ok(g2)
-                    }
-                }
-                Err(_) => Err(AltBn128Error::InvalidInputData),
-            }
         }
     }
 
@@ -365,30 +286,12 @@ mod target_arch {
 
 #[cfg(test)]
 mod tests {
-    use {
-        crate::{prelude::*, PodG1},
-        ark_bn254::g1::G1Affine,
-        ark_ec::AffineRepr,
-        ark_serialize::{CanonicalSerialize, Compress},
-    };
+    use crate::prelude::*;
 
     #[test]
     fn zero_serialization_test() {
-        let zero = G1Affine::zero();
-        let mut result_point_data = [0u8; 64];
-        zero.x
-            .serialize_with_mode(&mut result_point_data[..32], Compress::No)
-            .map_err(|_| AltBn128Error::InvalidInputData)
-            .unwrap();
-        zero.y
-            .serialize_with_mode(&mut result_point_data[32..], Compress::No)
-            .map_err(|_| AltBn128Error::InvalidInputData)
-            .unwrap();
-        assert_eq!(result_point_data, [0u8; 64]);
-
-        let p: G1Affine = PodG1(result_point_data[..64].try_into().unwrap())
-            .try_into()
-            .unwrap();
-        assert_eq!(p, zero);
+        let input = [0u8; ALT_BN128_G1_ADDITION_INPUT_SIZE];
+        let result = alt_bn128_g1_addition_le(&input).unwrap();
+        assert_eq!(result, [0u8; ALT_BN128_G1_POINT_SIZE]);
     }
 }
