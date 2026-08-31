@@ -217,47 +217,60 @@ pub fn hashv(
     // not supported.
     #[cfg(not(any(target_os = "solana", target_arch = "bpf")))]
     {
-        use {
-            ark_bn254::Fr,
-            light_poseidon::{Poseidon, PoseidonBytesHasher, PoseidonError},
-        };
+        #[cfg(solana_poseidon_backend = "ark05")]
+        {
+            use {
+                ark_bn254::Fr,
+                light_poseidon::{Poseidon, PoseidonBytesHasher, PoseidonError},
+            };
 
-        #[allow(non_local_definitions)]
-        impl From<PoseidonError> for PoseidonSyscallError {
-            fn from(error: PoseidonError) -> Self {
-                match error {
-                    PoseidonError::InvalidNumberOfInputs { .. } => {
-                        PoseidonSyscallError::InvalidNumberOfInputs
-                    }
-                    PoseidonError::EmptyInput => PoseidonSyscallError::EmptyInput,
-                    PoseidonError::InvalidInputLength { .. } => {
-                        PoseidonSyscallError::InvalidInputLength
-                    }
-                    PoseidonError::BytesToPrimeFieldElement { .. } => {
-                        PoseidonSyscallError::BytesToPrimeFieldElement
-                    }
-                    PoseidonError::InputLargerThanModulus => {
-                        PoseidonSyscallError::InputLargerThanModulus
-                    }
-                    PoseidonError::VecToArray => PoseidonSyscallError::VecToArray,
-                    PoseidonError::U64Tou8 => PoseidonSyscallError::U64Tou8,
-                    PoseidonError::BytesToBigInt => PoseidonSyscallError::BytesToBigInt,
-                    PoseidonError::InvalidWidthCircom { .. } => {
-                        PoseidonSyscallError::InvalidWidthCircom
+            #[allow(non_local_definitions)]
+            impl From<PoseidonError> for PoseidonSyscallError {
+                fn from(error: PoseidonError) -> Self {
+                    match error {
+                        PoseidonError::InvalidNumberOfInputs { .. } => {
+                            PoseidonSyscallError::InvalidNumberOfInputs
+                        }
+                        PoseidonError::EmptyInput => PoseidonSyscallError::EmptyInput,
+                        PoseidonError::InvalidInputLength { .. } => {
+                            PoseidonSyscallError::InvalidInputLength
+                        }
+                        PoseidonError::BytesToPrimeFieldElement { .. } => {
+                            PoseidonSyscallError::BytesToPrimeFieldElement
+                        }
+                        PoseidonError::InputLargerThanModulus => {
+                            PoseidonSyscallError::InputLargerThanModulus
+                        }
+                        PoseidonError::VecToArray => PoseidonSyscallError::VecToArray,
+                        PoseidonError::U64Tou8 => PoseidonSyscallError::U64Tou8,
+                        PoseidonError::BytesToBigInt => PoseidonSyscallError::BytesToBigInt,
+                        PoseidonError::InvalidWidthCircom { .. } => {
+                            PoseidonSyscallError::InvalidWidthCircom
+                        }
                     }
                 }
             }
-        }
 
-        let mut hasher =
-            Poseidon::<Fr>::new_circom(vals.len()).map_err(PoseidonSyscallError::from)?;
-        let res = match endianness {
-            Endianness::BigEndian => hasher.hash_bytes_be(vals),
-            Endianness::LittleEndian => hasher.hash_bytes_le(vals),
-        }
-        .map_err(PoseidonSyscallError::from)?;
+            let mut hasher =
+                Poseidon::<Fr>::new_circom(vals.len()).map_err(PoseidonSyscallError::from)?;
+            let res = match endianness {
+                Endianness::BigEndian => hasher.hash_bytes_be(vals),
+                Endianness::LittleEndian => hasher.hash_bytes_le(vals),
+            }
+            .map_err(PoseidonSyscallError::from)?;
 
-        Ok(PoseidonHash(res))
+            Ok(PoseidonHash(res))
+        }
+        #[cfg(solana_poseidon_backend = "narsil")]
+        {
+            let endianness = match endianness {
+                Endianness::BigEndian => helius_narsil::poseidon::Endianness::BigEndian,
+                Endianness::LittleEndian => helius_narsil::poseidon::Endianness::LittleEndian,
+            };
+            let hash = helius_narsil::poseidon::hashv(endianness, vals)
+                .map_err(|error| PoseidonSyscallError::from(u64::from(error)))?;
+            Ok(PoseidonHash(hash))
+        }
     }
     // Call via a system call to perform the calculation.
     #[cfg(any(target_os = "solana", target_arch = "bpf"))]
