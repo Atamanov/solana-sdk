@@ -1,20 +1,27 @@
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+use crate::mcl;
+#[cfg(not(target_os = "solana"))]
+use crate::target_arch::Endianness;
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "narsil"))]
+use crate::target_arch::{narsil_endianness, narsil_error};
+#[cfg(all(
+    not(target_os = "solana"),
+    any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06")
+))]
+use crate::{
+    ark_bn254::{self, Config},
+    ark_ec::{bn::Bn, pairing::Pairing},
+    ark_ff::One,
+    target_arch::{G1, G2},
+};
+#[cfg(all(not(target_os = "solana"), not(solana_bn254_backend = "narsil")))]
+use crate::{consts::ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE, PodG1, PodG2};
 use crate::{
     consts::{ALT_BN128_G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE},
     AltBn128Error, LE_FLAG,
 };
 #[cfg(target_os = "solana")]
 use solana_define_syscall::definitions as syscalls;
-#[cfg(not(target_os = "solana"))]
-use {
-    crate::{
-        consts::ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE,
-        target_arch::{Endianness, G1, G2},
-        PodG1, PodG2,
-    },
-    ark_bn254::{self, Config},
-    ark_ec::{bn::Bn, pairing::Pairing},
-    ark_ff::{BigInteger, BigInteger256, One},
-};
 
 /// Pair element size.
 pub const ALT_BN128_PAIRING_ELEMENT_SIZE: usize = ALT_BN128_G1_POINT_SIZE + ALT_BN128_G2_POINT_SIZE; // 192
@@ -63,58 +70,65 @@ pub fn alt_bn128_versioned_pairing(
     input: &[u8],
     endianness: Endianness,
 ) -> Result<Vec<u8>, AltBn128Error> {
-    match version {
-        VersionedPairing::V0 => {
-            if input
-                .len()
-                .checked_rem(ALT_BN128_PAIRING_ELEMENT_SIZE)
-                .is_none()
+    #[cfg(solana_bn254_backend = "narsil")]
+    {
+        let version = match version {
+            VersionedPairing::V0 => helius_narsil::flat::PairingVersion::V0,
+            VersionedPairing::V1 => helius_narsil::flat::PairingVersion::V1,
+        };
+        helius_narsil::flat::alt_bn128_pairing(version, input, narsil_endianness(endianness))
+            .map_err(narsil_error)
+    }
+    #[cfg(not(solana_bn254_backend = "narsil"))]
+    {
+        match version {
+            VersionedPairing::V0 => {
+                if input
+                    .len()
+                    .checked_rem(ALT_BN128_PAIRING_ELEMENT_SIZE)
+                    .is_none()
+                {
+                    return Err(AltBn128Error::InvalidInputData);
+                }
+            }
+            VersionedPairing::V1 =>
             {
-                return Err(AltBn128Error::InvalidInputData);
+                #[allow(clippy::manual_is_multiple_of)]
+                if input.len() % ALT_BN128_PAIRING_ELEMENT_SIZE != 0 {
+                    return Err(AltBn128Error::InvalidInputData);
+                }
             }
         }
-        VersionedPairing::V1 =>
-        {
-            #[allow(clippy::manual_is_multiple_of)]
-            if input.len() % ALT_BN128_PAIRING_ELEMENT_SIZE != 0 {
-                return Err(AltBn128Error::InvalidInputData);
+
+        let ele_len = input.len().saturating_div(ALT_BN128_PAIRING_ELEMENT_SIZE);
+
+        let mut pairs: Vec<(PodG1, PodG2)> = Vec::with_capacity(ele_len);
+        for chunk in input.chunks(ALT_BN128_PAIRING_ELEMENT_SIZE).take(ele_len) {
+            let (p_bytes, q_bytes) = chunk.split_at(G1_POINT_SIZE);
+
+            let g1 = match endianness {
+                Endianness::BE => PodG1::from_be_bytes(p_bytes)?,
+                Endianness::LE => PodG1::from_le_bytes(p_bytes)?,
+            };
+            let g2 = match endianness {
+                Endianness::BE => PodG2::from_be_bytes(q_bytes)?,
+                Endianness::LE => PodG2::from_le_bytes(q_bytes)?,
+            };
+
+            pairs.push((g1, g2));
+        }
+
+        let is_one = pairing_is_one(&pairs)?;
+
+        let mut output = [0u8; ALT_BN128_PAIRING_OUTPUT_SIZE];
+        if is_one {
+            match endianness {
+                Endianness::BE => output[ALT_BN128_PAIRING_OUTPUT_SIZE - 1] = 1,
+                Endianness::LE => output[0] = 1,
             }
         }
+        Ok(output.to_vec())
     }
-
-    let ele_len = input.len().saturating_div(ALT_BN128_PAIRING_ELEMENT_SIZE);
-
-    let mut vec_pairs: Vec<(G1, G2)> = Vec::with_capacity(ele_len);
-    for chunk in input.chunks(ALT_BN128_PAIRING_ELEMENT_SIZE).take(ele_len) {
-        let (p_bytes, q_bytes) = chunk.split_at(G1_POINT_SIZE);
-
-        let g1 = match endianness {
-            Endianness::BE => PodG1::from_be_bytes(p_bytes)?.try_into()?,
-            Endianness::LE => PodG1::from_le_bytes(p_bytes)?.try_into()?,
-        };
-        let g2 = match endianness {
-            Endianness::BE => PodG2::from_be_bytes(q_bytes)?.try_into()?,
-            Endianness::LE => PodG2::from_le_bytes(q_bytes)?.try_into()?,
-        };
-
-        vec_pairs.push((g1, g2));
-    }
-
-    let mut result = BigInteger256::from(0u64);
-    let res = <Bn<Config> as Pairing>::multi_pairing(
-        vec_pairs.iter().map(|pair| pair.0),
-        vec_pairs.iter().map(|pair| pair.1),
-    );
-
-    if res.0 == ark_bn254::Fq12::one() {
-        result = BigInteger256::from(1u64);
-    }
-
-    let output = match endianness {
-        Endianness::BE => result.to_bytes_be(),
-        Endianness::LE => result.to_bytes_le(),
-    };
-    Ok(output)
 }
 
 #[inline(always)]
@@ -204,6 +218,35 @@ pub fn alt_bn128_pairing_le(input: &[u8]) -> Result<Vec<u8>, AltBn128Error> {
             }
         }
     }
+}
+
+#[cfg(all(
+    not(target_os = "solana"),
+    any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06")
+))]
+fn pairing_is_one(pairs: &[(PodG1, PodG2)]) -> Result<bool, AltBn128Error> {
+    let mut vec_pairs: Vec<(G1, G2)> = Vec::with_capacity(pairs.len());
+    for (g1, g2) in pairs {
+        vec_pairs.push(((*g1).try_into()?, (*g2).try_into()?));
+    }
+
+    let res = <Bn<Config> as Pairing>::multi_pairing(
+        vec_pairs.iter().map(|pair| pair.0),
+        vec_pairs.iter().map(|pair| pair.1),
+    );
+
+    Ok(res.0 == ark_bn254::Fq12::one())
+}
+
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+fn pairing_is_one(pairs: &[(PodG1, PodG2)]) -> Result<bool, AltBn128Error> {
+    let mut pairs_le =
+        Vec::with_capacity(pairs.len().saturating_mul(ALT_BN128_PAIRING_ELEMENT_SIZE));
+    for (g1, g2) in pairs {
+        pairs_le.extend_from_slice(&g1.0);
+        pairs_le.extend_from_slice(&g2.0);
+    }
+    mcl::pairing_is_one(&pairs_le)
 }
 
 #[cfg(test)]

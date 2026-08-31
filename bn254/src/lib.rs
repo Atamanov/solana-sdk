@@ -91,6 +91,13 @@ pub mod prelude {
 #[cfg(not(target_os = "solana"))]
 use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "ark05"))]
+pub(crate) use {ark_bn254, ark_ec, ark_ff, ark_serialize};
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "ark06"))]
+pub(crate) use {
+    ark_bn254_06 as ark_bn254, ark_ec_06 as ark_ec, ark_ff_06 as ark_ff,
+    ark_serialize_06 as ark_serialize,
+};
 
 mod consts {
     /// Size of the EC point field, in bytes.
@@ -155,11 +162,10 @@ impl From<AltBn128Error> for u64 {
     }
 }
 
+#[cfg(all(not(target_os = "solana"), not(solana_bn254_backend = "narsil")))]
+use consts::{ALT_BN128_FIELD_SIZE as FIELD_SIZE, ALT_BN128_FQ2_SIZE as FQ2_SIZE};
 #[cfg(not(target_os = "solana"))]
-use consts::{
-    ALT_BN128_FIELD_SIZE as FIELD_SIZE, ALT_BN128_FQ2_SIZE as FQ2_SIZE,
-    ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE as G2_POINT_SIZE,
-};
+use consts::{ALT_BN128_G1_POINT_SIZE as G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE as G2_POINT_SIZE};
 
 /// A bitmask used to indicate that an operation's input data is little-endian.
 pub(crate) const LE_FLAG: u64 = 0x80;
@@ -201,17 +207,24 @@ pub struct PodG1(pub [u8; G1_POINT_SIZE]);
 #[repr(transparent)]
 pub struct PodG2(pub [u8; G2_POINT_SIZE]);
 
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+pub(crate) mod mcl;
+
 #[cfg(not(target_os = "solana"))]
 mod target_arch {
-    use {
-        super::*,
-        ark_ec::{self, AffineRepr},
-        ark_serialize::{CanonicalDeserialize, Compress, Validate},
+    use super::*;
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
+    use crate::{
+        ark_ec::AffineRepr,
+        ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate},
     };
 
-    pub(crate) type G1 = ark_bn254::g1::G1Affine;
-    pub(crate) type G2 = ark_bn254::g2::G2Affine;
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
+    pub(crate) type G1 = crate::ark_bn254::g1::G1Affine;
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
+    pub(crate) type G2 = crate::ark_bn254::g2::G2Affine;
 
+    #[cfg(not(solana_bn254_backend = "narsil"))]
     impl PodG1 {
         /// Takes in an EIP-197 (big-endian) byte encoding of a group element in G1 and constructs a
         /// `PodG1` struct that encodes the same bytes in little-endian.
@@ -236,6 +249,7 @@ mod target_arch {
         }
     }
 
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
     impl PodG2 {
         /// Deserializes to an affine point in G2.
         /// This function performs the curve equation check, but skips the subgroup check.
@@ -259,7 +273,10 @@ mod target_arch {
 
             Ok(g2)
         }
+    }
 
+    #[cfg(not(solana_bn254_backend = "narsil"))]
+    impl PodG2 {
         /// Takes in an EIP-197 (big-endian) byte encoding of a group element in G2
         /// and constructs a `PodG2` struct that encodes the same bytes in
         /// little-endian.
@@ -284,6 +301,7 @@ mod target_arch {
         }
     }
 
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
     impl TryFrom<PodG1> for G1 {
         type Error = AltBn128Error;
 
@@ -310,6 +328,7 @@ mod target_arch {
         }
     }
 
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
     impl TryFrom<PodG2> for G2 {
         type Error = AltBn128Error;
 
@@ -334,6 +353,47 @@ mod target_arch {
                 Err(_) => Err(AltBn128Error::InvalidInputData),
             }
         }
+    }
+
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
+    pub(crate) fn g1_to_le_bytes(point: G1) -> Result<[u8; G1_POINT_SIZE], AltBn128Error> {
+        let mut bytes = [0u8; G1_POINT_SIZE];
+        point
+            .x
+            .serialize_with_mode(&mut bytes[..FIELD_SIZE], Compress::No)
+            .map_err(|_| AltBn128Error::InvalidInputData)?;
+        point
+            .y
+            .serialize_with_mode(&mut bytes[FIELD_SIZE..], Compress::No)
+            .map_err(|_| AltBn128Error::InvalidInputData)?;
+        Ok(bytes)
+    }
+
+    #[cfg(any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06"))]
+    pub(crate) fn g2_to_le_bytes(point: G2) -> Result<[u8; G2_POINT_SIZE], AltBn128Error> {
+        let mut bytes = [0u8; G2_POINT_SIZE];
+        point
+            .x
+            .serialize_with_mode(&mut bytes[..FQ2_SIZE], Compress::No)
+            .map_err(|_| AltBn128Error::InvalidInputData)?;
+        point
+            .y
+            .serialize_with_mode(&mut bytes[FQ2_SIZE..], Compress::No)
+            .map_err(|_| AltBn128Error::InvalidInputData)?;
+        Ok(bytes)
+    }
+
+    #[cfg(solana_bn254_backend = "narsil")]
+    pub(crate) fn narsil_endianness(endianness: Endianness) -> helius_narsil::flat::Endianness {
+        match endianness {
+            Endianness::BE => helius_narsil::flat::Endianness::BE,
+            Endianness::LE => helius_narsil::flat::Endianness::LE,
+        }
+    }
+
+    #[cfg(solana_bn254_backend = "narsil")]
+    pub(crate) fn narsil_error(error: helius_narsil::flat::FlatError) -> AltBn128Error {
+        AltBn128Error::from(u64::from(error))
     }
 
     pub enum Endianness {
@@ -365,30 +425,12 @@ mod target_arch {
 
 #[cfg(test)]
 mod tests {
-    use {
-        crate::{prelude::*, PodG1},
-        ark_bn254::g1::G1Affine,
-        ark_ec::AffineRepr,
-        ark_serialize::{CanonicalSerialize, Compress},
-    };
+    use crate::prelude::*;
 
     #[test]
     fn zero_serialization_test() {
-        let zero = G1Affine::zero();
-        let mut result_point_data = [0u8; 64];
-        zero.x
-            .serialize_with_mode(&mut result_point_data[..32], Compress::No)
-            .map_err(|_| AltBn128Error::InvalidInputData)
-            .unwrap();
-        zero.y
-            .serialize_with_mode(&mut result_point_data[32..], Compress::No)
-            .map_err(|_| AltBn128Error::InvalidInputData)
-            .unwrap();
-        assert_eq!(result_point_data, [0u8; 64]);
-
-        let p: G1Affine = PodG1(result_point_data[..64].try_into().unwrap())
-            .try_into()
-            .unwrap();
-        assert_eq!(p, zero);
+        let input = [0u8; ALT_BN128_G1_ADDITION_INPUT_SIZE];
+        let result = alt_bn128_g1_addition_le(&input).unwrap();
+        assert_eq!(result, [0u8; ALT_BN128_G1_POINT_SIZE]);
     }
 }

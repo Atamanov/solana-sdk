@@ -1,18 +1,26 @@
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+use crate::mcl;
+#[cfg(not(target_os = "solana"))]
+use crate::target_arch::Endianness;
+#[cfg(all(
+    not(target_os = "solana"),
+    any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06")
+))]
+use crate::target_arch::{g1_to_le_bytes, g2_to_le_bytes, G1};
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "narsil"))]
+use crate::target_arch::{narsil_endianness, narsil_error};
+#[cfg(all(not(target_os = "solana"), not(solana_bn254_backend = "narsil")))]
+use crate::{
+    consts::{ALT_BN128_FIELD_SIZE, ALT_BN128_FQ2_SIZE},
+    target_arch::convert_endianness,
+    PodG1, PodG2,
+};
 use crate::{
     consts::{ALT_BN128_G1_POINT_SIZE, ALT_BN128_G2_POINT_SIZE},
     AltBn128Error, LE_FLAG,
 };
 #[cfg(target_os = "solana")]
 use solana_define_syscall::definitions as syscalls;
-#[cfg(not(target_os = "solana"))]
-use {
-    crate::{
-        consts::{ALT_BN128_FIELD_SIZE, ALT_BN128_FQ2_SIZE},
-        target_arch::{convert_endianness, Endianness, G1, G2},
-        PodG1, PodG2,
-    },
-    ark_serialize::{CanonicalSerialize, Compress},
-};
 
 /// Input size for the g1 add operation.
 pub const ALT_BN128_G1_ADDITION_INPUT_SIZE: usize = ALT_BN128_G1_POINT_SIZE * 2; // 128
@@ -79,63 +87,56 @@ pub fn alt_bn128_versioned_g1_addition(
     input: &[u8],
     endianness: Endianness,
 ) -> Result<Vec<u8>, AltBn128Error> {
-    match endianness {
-        Endianness::BE => {
-            if input.len() > ALT_BN128_G1_ADDITION_INPUT_SIZE {
-                return Err(AltBn128Error::InvalidInputData);
+    #[cfg(solana_bn254_backend = "narsil")]
+    {
+        let version = match _version {
+            VersionedG1Addition::V0 => helius_narsil::flat::G1AdditionVersion::V0,
+        };
+        helius_narsil::flat::alt_bn128_g1_addition(version, input, narsil_endianness(endianness))
+            .map_err(narsil_error)
+    }
+    #[cfg(not(solana_bn254_backend = "narsil"))]
+    {
+        match endianness {
+            Endianness::BE => {
+                if input.len() > ALT_BN128_G1_ADDITION_INPUT_SIZE {
+                    return Err(AltBn128Error::InvalidInputData);
+                }
+            }
+            Endianness::LE => {
+                if input.len() != ALT_BN128_G1_ADDITION_INPUT_SIZE {
+                    return Err(AltBn128Error::InvalidInputData);
+                }
             }
         }
-        Endianness::LE => {
-            if input.len() != ALT_BN128_G1_ADDITION_INPUT_SIZE {
-                return Err(AltBn128Error::InvalidInputData);
-            }
+
+        let mut input = input.to_vec();
+        match endianness {
+            Endianness::BE => input.resize(ALT_BN128_G1_ADDITION_INPUT_SIZE, 0),
+            Endianness::LE => (),
         }
-    }
 
-    let mut input = input.to_vec();
-    match endianness {
-        Endianness::BE => input.resize(ALT_BN128_G1_ADDITION_INPUT_SIZE, 0),
-        Endianness::LE => (),
-    }
+        let p = match endianness {
+            Endianness::BE => PodG1::from_be_bytes(&input[..ALT_BN128_G1_ADDITION_INPUT_SIZE / 2])?,
+            Endianness::LE => PodG1::from_le_bytes(&input[..ALT_BN128_G1_ADDITION_INPUT_SIZE / 2])?,
+        };
 
-    let p: G1 = match endianness {
-        Endianness::BE => {
-            PodG1::from_be_bytes(&input[..ALT_BN128_G1_ADDITION_INPUT_SIZE / 2])?.try_into()?
-        }
-        Endianness::LE => {
-            PodG1::from_le_bytes(&input[..ALT_BN128_G1_ADDITION_INPUT_SIZE / 2])?.try_into()?
-        }
-    };
+        let q = match endianness {
+            Endianness::BE => PodG1::from_be_bytes(&input[ALT_BN128_G1_ADDITION_INPUT_SIZE / 2..])?,
+            Endianness::LE => PodG1::from_le_bytes(&input[ALT_BN128_G1_ADDITION_INPUT_SIZE / 2..])?,
+        };
 
-    let q: G1 = match endianness {
-        Endianness::BE => {
-            PodG1::from_be_bytes(&input[ALT_BN128_G1_ADDITION_INPUT_SIZE / 2..])?.try_into()?
-        }
-        Endianness::LE => {
-            PodG1::from_le_bytes(&input[ALT_BN128_G1_ADDITION_INPUT_SIZE / 2..])?.try_into()?
-        }
-    };
+        let result_point_data = g1_add(p, q)?;
 
-    #[allow(clippy::arithmetic_side_effects)]
-    let result_point = p + q;
-
-    let mut result_point_data = [0u8; ALT_BN128_G1_POINT_SIZE];
-    let result_point_affine: G1 = result_point.into();
-    result_point_affine
-        .x
-        .serialize_with_mode(&mut result_point_data[..ALT_BN128_FIELD_SIZE], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-    result_point_affine
-        .y
-        .serialize_with_mode(&mut result_point_data[ALT_BN128_FIELD_SIZE..], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    match endianness {
-        Endianness::BE => Ok(
-            convert_endianness::<ALT_BN128_FIELD_SIZE, ALT_BN128_G1_POINT_SIZE>(&result_point_data)
+        match endianness {
+            Endianness::BE => Ok(
+                convert_endianness::<ALT_BN128_FIELD_SIZE, ALT_BN128_G1_POINT_SIZE>(
+                    &result_point_data,
+                )
                 .to_vec(),
-        ),
-        Endianness::LE => Ok(result_point_data.to_vec()),
+            ),
+            Endianness::LE => Ok(result_point_data.to_vec()),
+        }
     }
 }
 
@@ -231,44 +232,41 @@ pub fn alt_bn128_versioned_g2_addition(
     input: &[u8],
     endianness: Endianness,
 ) -> Result<Vec<u8>, AltBn128Error> {
-    if input.len() != ALT_BN128_G2_ADDITION_INPUT_SIZE {
-        return Err(AltBn128Error::InvalidInputData);
+    #[cfg(solana_bn254_backend = "narsil")]
+    {
+        let version = match _version {
+            VersionedG2Addition::V0 => helius_narsil::flat::G2AdditionVersion::V0,
+        };
+        helius_narsil::flat::alt_bn128_g2_addition(version, input, narsil_endianness(endianness))
+            .map_err(narsil_error)
     }
+    #[cfg(not(solana_bn254_backend = "narsil"))]
+    {
+        if input.len() != ALT_BN128_G2_ADDITION_INPUT_SIZE {
+            return Err(AltBn128Error::InvalidInputData);
+        }
 
-    let p: G2 = match endianness {
-        Endianness::BE => PodG2::from_be_bytes(&input[..ALT_BN128_G2_ADDITION_INPUT_SIZE / 2])?
-            .into_affine_unchecked()?,
-        Endianness::LE => PodG2::from_le_bytes(&input[..ALT_BN128_G2_ADDITION_INPUT_SIZE / 2])?
-            .into_affine_unchecked()?,
-    };
+        let p = match endianness {
+            Endianness::BE => PodG2::from_be_bytes(&input[..ALT_BN128_G2_ADDITION_INPUT_SIZE / 2])?,
+            Endianness::LE => PodG2::from_le_bytes(&input[..ALT_BN128_G2_ADDITION_INPUT_SIZE / 2])?,
+        };
 
-    let q: G2 = match endianness {
-        Endianness::BE => PodG2::from_be_bytes(&input[ALT_BN128_G2_ADDITION_INPUT_SIZE / 2..])?
-            .into_affine_unchecked()?,
-        Endianness::LE => PodG2::from_le_bytes(&input[ALT_BN128_G2_ADDITION_INPUT_SIZE / 2..])?
-            .into_affine_unchecked()?,
-    };
+        let q = match endianness {
+            Endianness::BE => PodG2::from_be_bytes(&input[ALT_BN128_G2_ADDITION_INPUT_SIZE / 2..])?,
+            Endianness::LE => PodG2::from_le_bytes(&input[ALT_BN128_G2_ADDITION_INPUT_SIZE / 2..])?,
+        };
 
-    #[allow(clippy::arithmetic_side_effects)]
-    let result_point = p + q;
+        let result_point_data = g2_add(p, q)?;
 
-    let mut result_point_data = [0u8; ALT_BN128_G2_POINT_SIZE];
-    let result_point_affine: G2 = result_point.into();
-    result_point_affine
-        .x
-        .serialize_with_mode(&mut result_point_data[..ALT_BN128_FQ2_SIZE], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-    result_point_affine
-        .y
-        .serialize_with_mode(&mut result_point_data[ALT_BN128_FQ2_SIZE..], Compress::No)
-        .map_err(|_| AltBn128Error::InvalidInputData)?;
-
-    match endianness {
-        Endianness::BE => Ok(
-            convert_endianness::<ALT_BN128_FQ2_SIZE, ALT_BN128_G2_POINT_SIZE>(&result_point_data)
+        match endianness {
+            Endianness::BE => Ok(
+                convert_endianness::<ALT_BN128_FQ2_SIZE, ALT_BN128_G2_POINT_SIZE>(
+                    &result_point_data,
+                )
                 .to_vec(),
-        ),
-        Endianness::LE => Ok(result_point_data.to_vec()),
+            ),
+            Endianness::LE => Ok(result_point_data.to_vec()),
+        }
     }
 }
 
@@ -330,4 +328,38 @@ pub fn alt_bn128_g2_addition_le(
             }
         }
     }
+}
+
+#[cfg(all(
+    not(target_os = "solana"),
+    any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06")
+))]
+fn g1_add(p: PodG1, q: PodG1) -> Result<[u8; ALT_BN128_G1_POINT_SIZE], AltBn128Error> {
+    let p: G1 = p.try_into()?;
+    let q: G1 = q.try_into()?;
+    #[allow(clippy::arithmetic_side_effects)]
+    let sum = p + q;
+    g1_to_le_bytes(sum.into())
+}
+
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+fn g1_add(p: PodG1, q: PodG1) -> Result<[u8; ALT_BN128_G1_POINT_SIZE], AltBn128Error> {
+    mcl::g1_add(&p.0, &q.0)
+}
+
+#[cfg(all(
+    not(target_os = "solana"),
+    any(solana_bn254_backend = "ark05", solana_bn254_backend = "ark06")
+))]
+fn g2_add(p: PodG2, q: PodG2) -> Result<[u8; ALT_BN128_G2_POINT_SIZE], AltBn128Error> {
+    let p = p.into_affine_unchecked()?;
+    let q = q.into_affine_unchecked()?;
+    #[allow(clippy::arithmetic_side_effects)]
+    let sum = p + q;
+    g2_to_le_bytes(sum.into())
+}
+
+#[cfg(all(not(target_os = "solana"), solana_bn254_backend = "mcl"))]
+fn g2_add(p: PodG2, q: PodG2) -> Result<[u8; ALT_BN128_G2_POINT_SIZE], AltBn128Error> {
+    mcl::g2_add(&p.0, &q.0)
 }
