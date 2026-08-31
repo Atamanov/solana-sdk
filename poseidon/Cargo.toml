@@ -22,6 +22,7 @@ solana-define-syscall = { workspace = true }
 
 [target.'cfg(not(any(target_os = "solana", target_arch = "bpf")))'.dependencies]
 ark-bn254 = { workspace = true }
+helius-narsil = { path = "../../helius-narsil", features = ["std"] }
 light-poseidon = { workspace = true }
 
 [lints]
