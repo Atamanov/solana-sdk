@@ -36,6 +36,19 @@ fn compile_mcl_bridge() {
         include.join("mcl/bn.h").is_file() && archive.is_file(),
         "MCL_DIR must contain include/mcl/bn.h and lib256/libmcl.a"
     );
+    // Built by helius-narsil bench/scripts/provision.sh.
+    const MCL_PIN: &str = "b70288469cd065b28a31764450f85238508c4d1e";
+    let head = std::process::Command::new("git")
+        .args(["-C", root.to_str().expect("MCL_DIR is not unicode"), "rev-parse", "HEAD"])
+        .output()
+        .expect("git must resolve the MCL_DIR revision");
+    assert!(head.status.success(), "MCL_DIR is not a git checkout");
+    let head = String::from_utf8_lossy(&head.stdout);
+    assert!(
+        head.trim() == MCL_PIN,
+        "MCL_DIR is at {} instead of the pin {MCL_PIN}",
+        head.trim()
+    );
 
     cc::Build::new()
         .cpp(true)

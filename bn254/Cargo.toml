@@ -28,7 +28,7 @@ ark-ff = { workspace = true }
 ark-ff-06 = { package = "ark-ff", version = "0.6.0" }
 ark-serialize = { workspace = true }
 ark-serialize-06 = { package = "ark-serialize", version = "0.6.0" }
-helius-narsil = { path = "../../helius-narsil", features = ["std"] }
+helius-narsil = { git = "https://github.com/Atamanov/helius-narsil.git", rev = "b3d6299009a62dc8906dc94c699219606b383821", features = ["std"] }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 solana-define-syscall = { workspace = true }
